@@ -1,24 +1,23 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { LoginScreen } from "@/components/LoginScreen";
 import { Dashboard } from "@/components/Dashboard";
 
-export const Route = createFileRoute("/")({
-  component: Index,
+export const Route = createFileRoute("/dashboard")({
+  component: DashboardPage,
 });
 
-function Index() {
+function DashboardPage() {
   const { session, loading } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!loading && session) {
-      navigate({ to: "/dashboard" });
+    if (!loading && !session) {
+      navigate({ to: "/" });
     }
   }, [loading, session, navigate]);
 
-  if (loading) {
+  if (loading || !session) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="h-12 w-12 animate-pulse rounded-full gradient-primary" />
@@ -26,6 +25,5 @@ function Index() {
     );
   }
 
-  if (session) return <Dashboard />;
-  return <LoginScreen />;
+  return <Dashboard />;
 }

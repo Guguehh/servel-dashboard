@@ -8,16 +8,16 @@ function NotFoundComponent() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="glass-card max-w-md rounded-3xl p-10 text-center">
         <h1 className="text-7xl font-bold gradient-text">404</h1>
-        <h2 className="mt-4 text-xl font-semibold">Page not found</h2>
+        <h2 className="mt-4 text-xl font-semibold">Página no encontrada</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          The page you're looking for doesn't exist.
+          La página que buscás no existe.
         </p>
         <div className="mt-6">
           <Link
             to="/"
             className="inline-flex items-center justify-center rounded-full gradient-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-glow transition-transform hover:scale-[1.02]"
           >
-            Go home
+            Ir al inicio
           </Link>
         </div>
       </div>
@@ -30,10 +30,10 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Momentum — Your premium workspace" },
+      { title: "Servel — Panel de servicios" },
       {
         name: "description",
-        content: "Momentum: a premium SaaS workspace to plan, track and ship your work.",
+        content: "Panel para administrar servicios, productos y precios.",
       },
     ],
     links: [
@@ -60,9 +60,15 @@ export const Route = createRootRoute({
 
 function RootShell({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="es">
       <head>
         <HeadContent />
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('servel.theme.v1');var d=t==='dark';var el=document.documentElement;if(d)el.classList.add('dark');else el.classList.remove('dark');}catch(e){}})();",
+          }}
+        />
       </head>
       <body>
         {children}

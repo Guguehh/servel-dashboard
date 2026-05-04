@@ -1,263 +1,333 @@
-import {
-  ArrowUpRight,
-  Plus,
-  Wrench,
-  TrendingUp,
-  CircleDollarSign,
-  HelpCircle,
-} from "lucide-react";
+import { Bolt, Plus, Wrench, Boxes, TrendingUp } from "lucide-react";
 import { Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { useServices } from "@/lib/services-store";
+import { useCategories, useDataStatus, usePriceTypes, useServices, servicesActions } from "@/lib/services-store";
 import { AppShell } from "@/components/AppShell";
-import orangeAbstract from "@/assets/orange-abstract.jpg";
-
-const heatmapRows = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-const heatmap: number[][] = [
-  [0, 0, 1, 1, 2, 2, 3, 3, 2, 1, 0, 0, 0],
-  [0, 1, 1, 2, 2, 3, 3, 3, 2, 1, 1, 0, 0],
-  [0, 0, 1, 2, 3, 3, 3, 3, 3, 2, 1, 0, 0],
-  [0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 2, 1, 0],
-  [0, 0, 1, 2, 3, 3, 3, 3, 2, 2, 1, 0, 0],
-];
-const heatmapHours = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
-const heatmapClasses = [
-  "bg-[oklch(0.93_0.02_70)]",
-  "bg-[oklch(0.88_0.08_55)]",
-  "bg-[oklch(0.78_0.16_45)]",
-  "bg-[oklch(0.65_0.22_35)]",
-];
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import { Area, AreaChart, XAxis, YAxis } from "recharts";
+import { supabase } from "@/integrations/supabase/client";
 
 export function Dashboard() {
   const { user } = useAuth();
+  const categorias = useCategories();
+  const { error, demo } = useDataStatus();
   const services = useServices();
 
-  const totalQuotes = services.reduce((acc, s) => acc + s.stats.quotes, 0);
-  const completed = services.reduce((acc, s) => acc + s.stats.completed, 0);
-  const conversion = totalQuotes ? Math.round((completed / totalQuotes) * 100) : 0;
-  const avgQuestions = services.length
-    ? (services.reduce((a, s) => a + s.questions.length, 0) / services.length).toFixed(1)
-    : "0";
+  const total = services.length;
+  const activos = services.filter((s) => s.activo).length;
+  const totalCampos = services.reduce((acc, s) => acc + (s.definicion.campos?.length ?? 0), 0);
+  const totalConfigs = services.reduce((acc, s) => {
+    const c = s.definicion.config;
+    return (
+      acc +
+      (c.precio.activo ? 1 : 0) +
+      (c.duracion.activo ? 1 : 0) +
+      (c.modalidad.activo ? 1 : 0) +
+      (c.ubicacion.requiere ? 1 : 0) +
+      (c.urgencia.permite ? 1 : 0)
+    );
+  }, 0);
+  const [usuarios, setUsuarios] = useState<number | null>(null);
+  const [especialistas, setEspecialistas] = useState<number | null>(null);
+  const [configServicios, setConfigServicios] = useState<number | null>(null);
 
-  const topServices = [...services].sort((a, b) => b.stats.quotes - a.stats.quotes).slice(0, 4);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      supabase.from("users").select("id", { count: "exact", head: true }),
+      supabase.from("specialist").select("id", { count: "exact", head: true }),
+      supabase.from("specialist_services").select("id", { count: "exact", head: true }),
+    ])
+      .then(([u, s, ss]) => {
+        if (cancelled) return;
+        setUsuarios(u.count ?? null);
+        setEspecialistas(s.count ?? null);
+        setConfigServicios(ss.count ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setUsuarios(null);
+        setEspecialistas(null);
+        setConfigServicios(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const topActivos = [...services]
+    .filter((s) => s.activo)
+    .sort((a, b) => (b.definicion.campos?.length ?? 0) - (a.definicion.campos?.length ?? 0))
+    .slice(0, 6);
+
+  const trend = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (13 - i));
+    const dia = d
+      .toLocaleDateString("es-AR", { weekday: "short" })
+      .replace(".", "")
+      .toUpperCase();
+    const base = Math.max(1, activos);
+    const solicitudes = Math.max(0, Math.round(base + (i % 4) * 0.6 + Math.sin(i / 1.9) * (base / 2)));
+    return { dia, solicitudes };
+  });
 
   return (
     <AppShell
-      title={`Hi, ${(user?.email ?? "there").split("@")[0]} 👋`}
-      subtitle="Here's how your quoters are performing this month."
+      title="HOME"
       actions={
         <Link
           to="/services"
-          className="hidden items-center gap-2 rounded-full gradient-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-glow transition hover:scale-[1.02] sm:inline-flex"
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-xs font-semibold text-primary-foreground transition hover:opacity-90"
         >
-          <Plus className="h-3.5 w-3.5" /> New service
+          <Plus className="h-4 w-4" /> Añadir nuevo servicio
         </Link>
       }
     >
+      {(error || demo) && (
+        <div className="mb-5 rounded-2xl border border-border bg-muted p-4 text-sm">
+          <div className="font-semibold">
+            {demo ? "Modo demo local (sin base de datos)" : "No se pudo cargar el catálogo desde la base de datos."}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {demo ? "No existen las tablas en Supabase. Se muestran datos de ejemplo." : error}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => servicesActions.refresh()}
+              className="rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold transition hover:bg-muted"
+            >
+              Reintentar
+            </button>
+            <button
+              type="button"
+              onClick={() => servicesActions.seedDemo()}
+              className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:opacity-90"
+            >
+              Cargar demo
+            </button>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-12 gap-5">
-        {/* Total Quotes */}
-        <Card className="col-span-12 sm:col-span-6 xl:col-span-3">
-          <CardHeader title="Total quotes" />
-          <div className="mt-3 text-3xl font-bold">{totalQuotes.toLocaleString()}</div>
-          <div className="mt-1 text-xs text-[oklch(0.55_0.18_140)]">
-            +{Math.max(1, Math.round(totalQuotes * 0.12))} this week
-          </div>
-          <div className="mt-5 space-y-2">
-            {topServices.slice(0, 3).map((s) => {
-              const pct = totalQuotes ? Math.round((s.stats.quotes / totalQuotes) * 100) : 0;
-              return (
-                <div key={s.id}>
-                  <div className="flex justify-between text-[11px]">
-                    <span className="truncate text-foreground/80">{s.name}</span>
-                    <span className="text-muted-foreground">{pct}%</span>
-                  </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[oklch(0.94_0.02_70)]">
-                    <div className="h-full gradient-primary" style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
+        <MetricBlock
+          className="col-span-12 sm:col-span-6 xl:col-span-3"
+          value={total.toLocaleString()}
+          suffix="SERVICIOS"
+          label="CATÁLOGO (APP)"
+          trend={`${categorias.length} CATEG.`}
+          icon={Wrench}
+        />
+        <MetricBlock
+          className="col-span-12 sm:col-span-6 xl:col-span-3"
+          value={activos.toLocaleString()}
+          suffix="ACTIVOS"
+          label="VISIBLES EN APP"
+          trend={`${totalCampos} CAMPOS`}
+          icon={Bolt}
+        />
+        <MetricBlock
+          className="col-span-12 sm:col-span-6 xl:col-span-3"
+          value={(usuarios ?? 0).toLocaleString()}
+          suffix="USUARIOS"
+          label="REGISTRADOS"
+          trend={`${(especialistas ?? 0).toLocaleString()} ESPEC.`}
+          icon={Boxes}
+        />
+        <MetricBlock
+          className="col-span-12 sm:col-span-6 xl:col-span-3"
+          value={(configServicios ?? 0).toLocaleString()}
+          suffix="CONFIGS"
+          label="SERVICIOS CONFIG."
+          trend={`${totalConfigs} BLOQUES`}
+          icon={TrendingUp}
+        />
 
-        {/* Hero card */}
-        <div className="col-span-12 xl:col-span-6">
-          <div className="relative h-full min-h-[280px] overflow-hidden rounded-3xl shadow-elegant">
-            <img
-              src={orangeAbstract}
-              alt="Servel quoter studio"
-              className="absolute inset-0 h-full w-full object-cover"
-              loading="lazy"
-            />
-            <div className="absolute inset-0 bg-gradient-to-br from-black/0 via-black/0 to-black/30" />
-            <div className="absolute bottom-6 left-6 max-w-sm rounded-2xl bg-white/15 p-5 text-white backdrop-blur-md">
-              <h3 className="font-display text-lg font-bold leading-tight">
-                Build smart quoters in minutes
-              </h3>
-              <p className="mt-1 text-xs text-white/85">
-                Define services, ask the right questions, set the rules — and let Servel quote
-                for you.
-              </p>
-              <Link
-                to="/services"
-                className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-primary"
-              >
-                Open services <ArrowUpRight className="h-3 w-3" />
-              </Link>
-            </div>
+        <div className="col-span-12">
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {(topActivos.length ? topActivos : services.slice(0, 6)).map((s) => (
+              <ServiceStatusCard key={s.id} service={s} />
+            ))}
           </div>
         </div>
 
-        {/* Conversion */}
-        <Card className="col-span-12 sm:col-span-6 xl:col-span-3">
-          <CardHeader title="Conversion rate" icon={TrendingUp} />
-          <div className="mt-3 text-3xl font-bold">{conversion}%</div>
-          <div className="mt-1 text-xs text-muted-foreground">Quotes → completed jobs</div>
-
-          <div className="mt-6 flex items-end gap-1.5">
-            {[40, 55, 48, 62, 58, 70, 65, 78, 72, 85].map((h, i) => (
-              <div
-                key={i}
-                className="flex-1 rounded-t-md gradient-primary opacity-80"
-                style={{ height: `${h}%` }}
-              />
-            ))}
-          </div>
-        </Card>
-
-        {/* Active services */}
-        <Card className="col-span-6 xl:col-span-3">
-          <CardHeader title="Active services" icon={Wrench} />
-          <div className="mt-3 text-3xl font-bold">{services.length}</div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            Avg {avgQuestions} questions / quoter
-          </div>
-        </Card>
-
-        {/* Avg ticket */}
-        <Card className="col-span-6 xl:col-span-3">
-          <CardHeader title="Avg quote value" icon={CircleDollarSign} />
-          <div className="mt-3 text-3xl font-bold">$487</div>
-          <div className="mt-1 text-xs text-[oklch(0.55_0.18_140)]">+8.4% vs last month</div>
-        </Card>
-
-        {/* Heatmap */}
-        <Card className="col-span-12 xl:col-span-6">
-          <div className="flex items-start justify-between">
+        <div className="col-span-12 rounded-2xl border border-border bg-card p-6">
+          <div className="flex items-start justify-between gap-4">
             <div>
-              <span className="text-sm font-semibold">When quotes are requested</span>
-              <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-muted-foreground">
-                <Legend color="oklch(0.93 0.02 70)" label="Low" />
-                <Legend color="oklch(0.88 0.08 55)" label="Medium" />
-                <Legend color="oklch(0.78 0.16 45)" label="High" />
-                <Legend color="oklch(0.65 0.22 35)" label="Peak" />
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Visualización de datos
               </div>
+              <div className="mt-1 text-lg font-bold">Solicitudes de servicios eléctricos por día</div>
             </div>
-            <Link
-              to="/analytics"
-              className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            <div className="text-right text-[11px] font-semibold text-muted-foreground">
+              Últimos 14 días
+            </div>
+          </div>
+
+          <div className="mt-5 h-64">
+            <ChartContainer
+              config={{
+                solicitudes: { label: "Solicitudes", color: "var(--primary)" },
+              }}
+              className="h-full w-full"
             >
-              View all
-            </Link>
+              <AreaChart data={trend} margin={{ left: 0, right: 12, top: 10, bottom: 0 }}>
+                <XAxis
+                  dataKey="dia"
+                  axisLine={{ stroke: "var(--foreground)", strokeWidth: 1 }}
+                  tickLine={false}
+                  tickMargin={10}
+                  interval={1}
+                  tick={{
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                    fontSize: 10,
+                    fill: "var(--foreground)",
+                  }}
+                />
+                <YAxis
+                  axisLine={{ stroke: "var(--foreground)", strokeWidth: 1 }}
+                  tickLine={false}
+                  width={28}
+                  tick={{
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                    fontSize: 10,
+                    fill: "var(--foreground)",
+                  }}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area
+                  type="linear"
+                  dataKey="solicitudes"
+                  stroke="var(--color-solicitudes)"
+                  fill="rgba(0, 102, 255, 0.12)"
+                  strokeWidth={3}
+                  dot={({ cx, cy }) => (
+                    <rect
+                      x={(cx ?? 0) - 3}
+                      y={(cy ?? 0) - 3}
+                      width={6}
+                      height={6}
+                      fill="var(--foreground)"
+                      opacity={cx == null || cy == null ? 0 : 1}
+                    />
+                  )}
+                  activeDot={false}
+                />
+              </AreaChart>
+            </ChartContainer>
           </div>
-
-          <div className="mt-5 flex gap-3">
-            <div className="flex flex-col justify-between py-1 text-[10px] font-medium text-muted-foreground">
-              {heatmapRows.map((r) => (
-                <span key={r}>{r}</span>
-              ))}
-            </div>
-            <div className="flex-1">
-              <div className="grid grid-rows-5 gap-1.5">
-                {heatmap.map((row, ri) => (
-                  <div
-                    key={ri}
-                    className="grid gap-1.5"
-                    style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}
-                  >
-                    {row.map((v, ci) => (
-                      <div
-                        key={ci}
-                        className={`aspect-square rounded-md transition hover:scale-110 ${heatmapClasses[v]}`}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <div
-                className="mt-2 grid gap-1.5 text-center text-[9px] text-muted-foreground"
-                style={{ gridTemplateColumns: `repeat(${heatmapHours.length}, minmax(0, 1fr))` }}
-              >
-                {heatmapHours.map((h) => (
-                  <div key={h}>{h}h</div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Most answered questions */}
-        <Card className="col-span-12 xl:col-span-6">
-          <CardHeader title="Most answered questions" icon={HelpCircle} />
-          <div className="mt-4 space-y-3">
-            {services
-              .flatMap((s) => s.questions.map((q) => ({ q, s })))
-              .slice(0, 5)
-              .map(({ q, s }, i) => {
-                const pct = 95 - i * 12;
-                return (
-                  <div key={q.id}>
-                    <div className="flex items-center justify-between text-[12px]">
-                      <span className="truncate">
-                        <span className="font-medium">{q.label}</span>
-                        <span className="text-muted-foreground"> · {s.name}</span>
-                      </span>
-                      <span className="text-muted-foreground">{pct}%</span>
-                    </div>
-                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[oklch(0.94_0.02_70)]">
-                      <div className="h-full gradient-primary" style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            {services.length === 0 && (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Create a service to start collecting answers.
-              </p>
-            )}
-          </div>
-        </Card>
+        </div>
       </div>
     </AppShell>
   );
 }
 
-function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`glass-card hover-lift rounded-3xl p-5 ${className}`}>{children}</div>;
-}
-
-function CardHeader({
-  title,
+function MetricBlock({
+  value,
+  suffix,
+  label,
+  trend,
   icon: Icon,
+  className = "",
 }: {
-  title: string;
-  icon?: React.ComponentType<{ className?: string }>;
+  value: string;
+  suffix: string;
+  label: string;
+  trend: string;
+  icon: React.ComponentType<{ className?: string }>;
+  className?: string;
 }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="flex items-center gap-2 text-sm font-semibold">
-        {Icon && <Icon className="h-4 w-4 text-primary" />}
-        {title}
-      </span>
+    <div className={`rounded-2xl border border-border bg-card p-5 ${className}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div />
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold text-primary">{trend}</span>
+          <div className="flex h-9 w-9 items-center justify-center border border-border bg-background">
+            <Icon className="h-5 w-5" />
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 text-center">
+        <div className="text-4xl font-bold tabular-nums text-foreground">
+          {value} <span className="text-2xl font-bold">{suffix}</span>
+        </div>
+        <div className="mt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
+        </div>
+      </div>
     </div>
   );
 }
 
-function Legend({ color, label }: { color: string; label: string }) {
+function ServiceStatusCard({
+  service,
+}: {
+  service: ReturnType<typeof useServices>[number];
+}) {
+  const categorias = useCategories();
+  const priceTypes = usePriceTypes();
+  const categoria = categorias.find((c) => c.id === service.categoryId)?.nombre ?? "—";
+  const unidad = priceTypes.find((t) => t.code === (service.definicion.config.precio.unidadCode ?? ""));
+  const unidadTexto = unidad ? `${unidad.label}${unidad.unitLabel ? ` / ${unidad.unitLabel}` : ""}` : "—";
+  const resumenPrecio = service.definicion.config.precio.activo ? unidadTexto : "Sin precio";
+  const campos = service.definicion.campos?.length ?? 0;
+
   return (
-    <span className="flex items-center gap-1">
-      <span className="h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
-      {label}
-    </span>
+    <div className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="flex items-center justify-between gap-3 border-b border-border bg-muted px-4 py-3 text-foreground">
+        <div className="text-xs font-semibold uppercase tracking-wider">
+          {service.nombre.toUpperCase()}
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className="h-2 w-2 bg-primary"
+            style={{
+              boxShadow: service.activo ? "0 0 0 3px rgba(0, 102, 255, 0.18)" : "none",
+              opacity: service.activo ? 1 : 0.35,
+            }}
+          />
+          <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+            {service.activo ? "ACTIVO" : "OFF"}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-4 p-4 md:grid-cols-[1fr_140px]">
+        <div className="space-y-3">
+          <div className="text-sm font-semibold text-foreground">
+            {service.descripcion || "—"}
+          </div>
+          <div className="flex flex-wrap gap-2 text-[11px] font-semibold text-muted-foreground">
+            <span className="border border-border bg-muted px-3 py-1">
+              CATEGORÍA: {categoria.toUpperCase()}
+            </span>
+            <span className="border border-border bg-muted px-3 py-1">
+              CAMPOS: {campos}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-1 flex-col justify-center rounded-xl border border-border bg-muted px-4 py-4 text-foreground">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              UNIDAD
+            </div>
+            <div className="mt-2 text-xl font-semibold tabular-nums">{resumenPrecio}</div>
+          </div>
+          <Link
+            to="/services/$id"
+            params={{ id: service.id }}
+            className="rounded-xl bg-primary px-4 py-3 text-center text-xs font-semibold text-primary-foreground transition hover:opacity-90"
+          >
+            Abrir
+          </Link>
+        </div>
+      </div>
+    </div>
   );
 }

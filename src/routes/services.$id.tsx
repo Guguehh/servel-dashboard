@@ -220,7 +220,7 @@ function Editor({ service }: { service: Servicio }) {
                   }}
                 />
                 <ConfigDuracion
-                  label={adminUi.labels.duracionEstimada}
+                  label="Duración"
                   value={def.config.duracion}
                   isTurno={isTurno}
                   onChange={(next) => updateConfig({ duracion: next })}
@@ -264,7 +264,7 @@ function Editor({ service }: { service: Servicio }) {
                       serviceId={service.id}
                       campo={c}
                       allCampos={campos}
-                      canDelete={role !== "buho"}
+                      canDelete={true}
                       onRequestRemoveCampo={() =>
                         setConfirm({
                           title: "Eliminar campo",
@@ -319,6 +319,12 @@ function Editor({ service }: { service: Servicio }) {
                     {def.config.duracion.tipo === "turno" ? "Duración del turno" : adminUi.labels.duracionEstimada}
                     {def.config.duracion.obligatorio ? " (oblig.)" : ""}
                   </span>
+                )}
+                {def.config.precio.activo && def.config.precio.permiteRangos && (
+                  <span className="border border-white/35 bg-white/10 px-2 py-1">Precio por rangos</span>
+                )}
+                {def.config.precio.activo && def.config.precio.permiteMinimo && (
+                  <span className="border border-white/35 bg-white/10 px-2 py-1">Precio mínimo</span>
                 )}
                 {def.config.modalidad.activo && (
                   <span className="border border-white/35 bg-white/10 px-2 py-1">
@@ -635,7 +641,12 @@ function VistaPreviaPlantilla({
       out.push({
         kind: "duracion",
         id: "cfg_duracion",
-        label: config.duracion.tipo === "turno" ? "Duración del turno" : labels.duracionEstimada,
+        label:
+          config.duracion.tipo === "turno"
+            ? "Duración del turno"
+            : config.duracion.modo === "exacta"
+              ? "Duración exacta"
+              : labels.duracionEstimada,
         required: Boolean(config.duracion.obligatorio),
       });
     if (config.modalidad.activo)
@@ -682,6 +693,16 @@ function VistaPreviaPlantilla({
                   <div className="mt-2">
                     <input disabled value="" className="input-base opacity-70" placeholder="Se completa en la app" />
                   </div>
+                  {(config.precio.permiteRangos || config.precio.permiteMinimo) && (
+                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-muted-foreground">
+                      {config.precio.permiteRangos && (
+                        <span className="border border-border bg-muted px-2 py-1">Permite rangos</span>
+                      )}
+                      {config.precio.permiteMinimo && (
+                        <span className="border border-border bg-muted px-2 py-1">Permite mínimo</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             }
@@ -1000,6 +1021,35 @@ function ConfigPrecio({
             </select>
           </Field>
 
+          <div className="border border-border bg-background p-3">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Opciones de precio
+              <HelpHint text="Opciones de la plantilla: habilitan funcionalidades de precio en la app. No se cargan números acá." />
+            </div>
+            <div className="mt-3 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Precio por rangos
+                    <HelpHint text="Habilita que la app pueda ofrecer cotización por rangos/cantidad (por ejemplo 1-20, 21-80, 81+)." />
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-foreground">Permitir rangos</div>
+                </div>
+                <TogglePill checked={Boolean(value.permiteRangos)} onChange={(v) => onChange({ ...value, permiteRangos: v })} />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Precio mínimo
+                    <HelpHint text="Habilita que la app pueda exigir/usar un precio mínimo para este servicio." />
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-foreground">Permitir mínimo</div>
+                </div>
+                <TogglePill checked={Boolean(value.permiteMinimo)} onChange={(v) => onChange({ ...value, permiteMinimo: v })} />
+              </div>
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={() => setAdding(true)}
@@ -1095,6 +1145,7 @@ function ConfigDuracion({
 }) {
   const forced = isTurno;
   const isActive = forced ? true : value.activo;
+  const modo = value.modo === "exacta" ? "exacta" : "estimada";
 
   const toggleOption = (opt: string) => {
     const current = value.opciones ?? [];
@@ -1114,7 +1165,7 @@ function ConfigDuracion({
               text={
                 isTurno
                   ? "Si cotizás por turno, la duración se define como opciones del turno dentro de la plantilla."
-                  : "Define si esta plantilla solicita una duración estimada. No es una duración numérica fija."
+                  : "Define si esta plantilla solicita una duración (exacta o estimada). No es una duración numérica fija."
               }
             />
           </div>
@@ -1122,7 +1173,15 @@ function ConfigDuracion({
         <TogglePill
           checked={isActive}
           disabled={forced}
-          onChange={(v) => onChange({ ...value, activo: v, tipo: v ? value.tipo : "libre", opciones: v ? value.opciones : undefined })}
+          onChange={(v) =>
+            onChange({
+              ...value,
+              activo: v,
+              tipo: v ? value.tipo : "libre",
+              modo: v ? (value.modo === "exacta" ? "exacta" : "estimada") : value.modo,
+              opciones: v ? value.opciones : undefined,
+            })
+          }
         />
       </div>
       {isActive && (
@@ -1132,6 +1191,33 @@ function ConfigDuracion({
             checked={value.obligatorio}
             onChange={(v) => onChange({ ...value, activo: true, obligatorio: v })}
           />
+          {!isTurno && (
+            <div className="mt-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Tipo de duración <HelpHint text="Selecciona si la app mostrará duración exacta o estimada para este servicio." />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {([
+                  { id: "estimada", label: "Estimada" },
+                  { id: "exacta", label: "Exacta" },
+                ] as const).map((opt) => {
+                  const selected = modo === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => onChange({ ...value, activo: true, modo: opt.id })}
+                      className={`border border-border px-3.5 py-1.5 text-xs font-semibold transition ${
+                        selected ? "bg-primary text-primary-foreground" : "bg-background text-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {isTurno && (
             <div className="mt-3 space-y-2">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">

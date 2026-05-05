@@ -3,6 +3,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { supabase } from "@/integrations/supabase/client";
+import { servicesActions } from "@/lib/services-store";
 
 type AdminRole = "aguila" | "halcon" | "buho";
 
@@ -63,6 +64,8 @@ function normalizeEmail(email: string) {
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
+
+const SUPERADMIN_EMAILS = new Set(["admin@admin.com", "admin@admin"]);
 
 function passwordPolicyError(password: string) {
   if (password.length < 8) return "La clave debe tener al menos 8 caracteres.";
@@ -277,6 +280,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return fake;
   }, [localUser, session]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    servicesActions.refreshActor().catch(() => {});
+  }, [localUser?.id, session]);
+
   const signIn = async (email: string, password: string) => {
     const normalized = normalizeEmail(email);
     if (!normalized) return { error: "Ingresá tu correo." };
@@ -386,7 +394,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: u.id,
         email: u.email,
         name: u.name,
-        role: u.role,
+        role: SUPERADMIN_EMAILS.has(u.email) ? "aguila" : (u.role === "aguila" ? "halcon" : u.role),
         avatarDataUrl: u.avatarDataUrl,
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
@@ -394,14 +402,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .sort((a, b) => a.email.localeCompare(b.email));
   };
 
-  const isAguila = ((effectiveUser as any)?.user_metadata?.role as AdminRole | undefined) === "aguila" || normalizeEmail(effectiveUser?.email ?? "") === "admin@admin.com";
+  const isSuperAdmin = SUPERADMIN_EMAILS.has(normalizeEmail(effectiveUser?.email ?? ""));
 
   const createAccount = async (payload: { email: string; password: string; name: string; role: AdminRole }) => {
-    if (!isAguila) return { error: "No tenés permisos para crear cuentas." };
+    if (!isSuperAdmin) return { error: "No tenés permisos para crear cuentas." };
     const email = normalizeEmail(payload.email);
     const name = payload.name.trim();
     if (!isValidEmail(email)) return { error: "Email inválido." };
     if (!name) return { error: "Nombre requerido." };
+    if (SUPERADMIN_EMAILS.has(email)) return { error: "La cuenta padre ya existe." };
+    if (payload.role === "aguila") return { error: "Sólo existe una cuenta águila (admin@admin.com)." };
     const pwdErr = passwordPolicyError(payload.password);
     if (pwdErr) return { error: pwdErr };
     const users = readLocalUsers();
@@ -427,14 +437,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const updateAccount = async (id: string, patch: Partial<Pick<LocalUserPublic, "name" | "role" | "avatarDataUrl">>) => {
-    if (!isAguila) return { error: "No tenés permisos para editar cuentas." };
+    if (!isSuperAdmin) return { error: "No tenés permisos para editar cuentas." };
     const users = readLocalUsers();
     const idx = users.findIndex((u) => u.id === id);
     if (idx < 0) return { error: "Cuenta no encontrada." };
+    const isTargetSuperAdmin = SUPERADMIN_EMAILS.has(users[idx]!.email);
+    if (!isTargetSuperAdmin && patch.role === "aguila") return { error: "Sólo existe una cuenta águila (admin@admin.com)." };
     const next: LocalUserRecord = {
       ...users[idx]!,
       name: typeof patch.name === "string" ? patch.name.trim() : users[idx]!.name,
-      role: (patch.role as AdminRole | undefined) ?? users[idx]!.role,
+      role: isTargetSuperAdmin ? "aguila" : ((patch.role as AdminRole | undefined) ?? users[idx]!.role),
       avatarDataUrl: typeof patch.avatarDataUrl === "string" ? patch.avatarDataUrl : users[idx]!.avatarDataUrl,
       updatedAt: Date.now(),
     };
@@ -457,7 +469,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const setAccountPassword = async (id: string, newPassword: string) => {
-    if (!isAguila) return { error: "No tenés permisos para cambiar claves." };
+    if (!isSuperAdmin) return { error: "No tenés permisos para cambiar claves." };
     const pwdErr = passwordPolicyError(newPassword);
     if (pwdErr) return { error: pwdErr };
     const users = readLocalUsers();

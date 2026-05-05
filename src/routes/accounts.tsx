@@ -10,6 +10,11 @@ export const Route = createFileRoute("/accounts")({
 });
 
 type AdminRole = "aguila" | "halcon" | "buho";
+const SUPERADMIN_EMAILS = new Set(["admin@admin.com", "admin@admin"]);
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
 
 function AccountsPage() {
   const { session, loading, listAccounts, createAccount, updateAccount, setAccountPassword, verifyPassword } = useAuth();
@@ -211,7 +216,6 @@ function CreateAccountDialog({
           <div>
             <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Rol</div>
             <select value={role} onChange={(e) => setRole(e.target.value as AdminRole)} className="input-base">
-              <option value="aguila">aguila</option>
               <option value="halcon">halcon</option>
               <option value="buho">buho</option>
             </select>
@@ -254,8 +258,11 @@ function EditAccountDialog({
   onClose: () => void;
   onSave: (patch: Partial<{ name: string; role: AdminRole; avatarDataUrl: string }>) => Promise<{ error: string | null }>;
 }) {
+  const isSuperAdminAccount = SUPERADMIN_EMAILS.has(normalizeEmail(account.email));
   const [name, setName] = useState(account.name);
-  const [role, setRole] = useState<AdminRole>(account.role);
+  const [role, setRole] = useState<AdminRole>(
+    isSuperAdminAccount ? "aguila" : (account.role === "aguila" ? "halcon" : account.role),
+  );
   const [avatar, setAvatar] = useState(account.avatarDataUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -323,10 +330,20 @@ function EditAccountDialog({
             </div>
             <div>
               <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Rol</div>
-              <select value={role} onChange={(e) => setRole(e.target.value as AdminRole)} className="input-base">
-                <option value="aguila">aguila</option>
-                <option value="halcon">halcon</option>
-                <option value="buho">buho</option>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as AdminRole)}
+                className="input-base"
+                disabled={isSuperAdminAccount}
+              >
+                {isSuperAdminAccount ? (
+                  <option value="aguila">aguila</option>
+                ) : (
+                  <>
+                    <option value="halcon">halcon</option>
+                    <option value="buho">buho</option>
+                  </>
+                )}
               </select>
             </div>
           </div>

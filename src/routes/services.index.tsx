@@ -92,7 +92,7 @@ function ServicesIndex() {
               },
               duracion: isTurno
                 ? { activo: true, obligatorio: true, tipo: "turno", opciones: ["45 min", "60 min", "90 min", "Personalizado"] }
-                : { activo: false, obligatorio: false, tipo: "libre" },
+                : { activo: false, obligatorio: false, tipo: "libre", modo: "estimada" },
               modalidad: { activo: false, opciones: [] },
               ubicacion: { requiere: false },
               urgencia: { permite: false },
@@ -109,6 +109,7 @@ function ServicesIndex() {
 
       const svc = await servicesActions.create(nombre.trim());
       const isTurno = precioActivo && (unidadCode || "").includes("turno");
+      const camposDefaults = categoryId ? servicesActions.createCamposFromCategoryDefaults(categoryId) : [];
       await servicesActions.update(svc.id, {
         categoryId: categoryId || undefined,
         definicion: {
@@ -132,6 +133,7 @@ function ServicesIndex() {
                 }
               : svc.definicion.config.duracion,
           },
+          campos: camposDefaults,
         },
       });
       setCreating(false);

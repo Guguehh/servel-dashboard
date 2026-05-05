@@ -57,7 +57,7 @@ export interface TipoPrecio {
 export interface RangoPrecio {
   id: string;
   minCantidad: number;
-  maxCantidad?: number;
+  maxCantidad: number | null;
   precioPorUnidad: number;
 }
 
@@ -98,6 +98,11 @@ export interface Servicio {
   nombre: string;
   descripcion: string;
   activo: boolean;
+  basePrice?: number | null;
+  visitPrice?: number | null;
+  hasQuantityPricing?: boolean;
+  priceRanges?: RangoPrecio[];
+  minPrice?: number | null;
   definicion: PlantillaServicioDefinition;
   creadoEn: number;
 }
@@ -121,6 +126,7 @@ export interface PlantillaCampoOpcion {
 
 export interface PlantillaCampo {
   id: string;
+  defaultKey?: string;
   nombre: string;
   tipo: PlantillaCampoTipo;
   obligatorio: boolean;
@@ -129,8 +135,19 @@ export interface PlantillaCampo {
 }
 
 export interface PlantillaServicioConfig {
-  precio: { activo: boolean; unidadCode?: PlantillaUnidadCode | null };
-  duracion: { activo: boolean; obligatorio: boolean; tipo: "libre" | "turno"; opciones?: string[] };
+  precio: {
+    activo: boolean;
+    unidadCode?: PlantillaUnidadCode | null;
+    permiteRangos?: boolean;
+    permiteMinimo?: boolean;
+  };
+  duracion: {
+    activo: boolean;
+    obligatorio: boolean;
+    tipo: "libre" | "turno";
+    modo?: "estimada" | "exacta";
+    opciones?: string[];
+  };
   modalidad: { activo: boolean; opciones: PlantillaModalidadOpcion[] };
   ubicacion: { requiere: boolean };
   urgencia: { permite: boolean };
@@ -169,6 +186,7 @@ type StoreSnapshot = {
   categorias: Categoria[];
   tiposPrecio: TipoPrecio[];
   adminUi: AdminUiConfig;
+  categoriaCampoDefaults: Record<string, PlantillaCampo[]>;
   servicios: Servicio[];
   adminRole: AdminRole;
   actorEmail: string | null;
@@ -203,6 +221,7 @@ let snapshot: StoreSnapshot = {
       configuracionServicio: "Configuración del servicio",
     },
   },
+  categoriaCampoDefaults: {},
   servicios: [],
   adminRole: "buho",
   actorEmail: null,
@@ -218,6 +237,7 @@ const SEEDED_KEY = "servel.demo_seeded.v1";
 const ADMIN_UI_KEY = "servel.admin_ui.v1";
 const REQUESTS_KEY = "servel.admin_change_requests.v1";
 const AUDIT_KEY = "servel.admin_audit_log.v1";
+const CATEGORY_DEFAULTS_KEY = "servel.category_defaults.v1";
 let seedingPromise: Promise<void> | null = null;
 
 function emit() {
@@ -252,6 +272,36 @@ function jid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function normalizePriceRanges(value: Json | null | undefined): RangoPrecio[] {
+  const raw = asArray<any>(value);
+  const out: RangoPrecio[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const id = typeof r.id === "string" && r.id.trim() ? r.id : jid("rng");
+    const minCantidad =
+      typeof r.minCantidad === "number" && Number.isFinite(r.minCantidad)
+        ? r.minCantidad
+        : typeof r.min_cantidad === "number" && Number.isFinite(r.min_cantidad)
+          ? r.min_cantidad
+          : 1;
+    const maxRaw =
+      typeof r.maxCantidad === "number" && Number.isFinite(r.maxCantidad)
+        ? r.maxCantidad
+        : typeof r.max_cantidad === "number" && Number.isFinite(r.max_cantidad)
+          ? r.max_cantidad
+          : null;
+    const maxCantidad = maxRaw === null ? null : maxRaw;
+    const precioPorUnidad =
+      typeof r.precioPorUnidad === "number" && Number.isFinite(r.precioPorUnidad)
+        ? r.precioPorUnidad
+        : typeof r.precio_por_unidad === "number" && Number.isFinite(r.precio_por_unidad)
+          ? r.precio_por_unidad
+          : 0;
+    out.push({ id, minCantidad, maxCantidad, precioPorUnidad });
+  }
+  return out;
+}
+
 function isMissingTableError(msg: string) {
   return msg.includes("schema cache") || msg.includes("Could not find the table");
 }
@@ -265,14 +315,29 @@ function safeParseJson<T>(value: string | null): T | null {
   }
 }
 
+const SUPERADMIN_EMAILS = new Set(["admin@admin.com", "admin@admin"]);
+
+function normalizeEmail(email: string | null | undefined) {
+  return (email ?? "").trim().toLowerCase();
+}
+
+function normalizeRole(role: unknown): AdminRole | null {
+  if (role === "aguila" || role === "halcon" || role === "buho") return role;
+  return null;
+}
+
+function resolveAdminRole(email: string | null | undefined, hintedRole: AdminRole | null) {
+  const e = normalizeEmail(email);
+  if (SUPERADMIN_EMAILS.has(e)) return "aguila" as const;
+  if (hintedRole === "aguila") return "halcon" as const;
+  if (hintedRole === "halcon" || hintedRole === "buho") return hintedRole;
+  if (e === "halcon@admin.com" || e === "halcón@admin.com") return "halcon" as const;
+  if (e === "buho@admin.com" || e === "búho@admin.com") return "buho" as const;
+  return "buho" as const;
+}
+
 function inferRoleFromEmail(email: string | null | undefined): AdminRole {
-  const e = (email ?? "").toLowerCase();
-  if (e === "admin@admin.com") return "aguila";
-  if (e === "halcon@admin.com" || e === "halcón@admin.com") return "halcon";
-  if (e === "buho@admin.com" || e === "búho@admin.com") return "buho";
-  if (e.includes("aguila")) return "aguila";
-  if (e.includes("halcon") || e.includes("halcón")) return "halcon";
-  return "buho";
+  return resolveAdminRole(email, null);
 }
 
 function readRequestsFromStorage(): AdminChangeRequest[] {
@@ -300,8 +365,8 @@ async function getActor() {
     const { data } = await supabase.auth.getUser();
     const email = data.user?.email ?? null;
     if (email) {
-      const role = inferRoleFromEmail(email);
-      return { email, role };
+      const hintedRole = normalizeRole((data.user as any)?.user_metadata?.role);
+      return { email, role: resolveAdminRole(email, hintedRole) };
     }
   } catch {
   }
@@ -312,8 +377,8 @@ async function getActor() {
       const users = safeParseJson<any[]>(localStorage.getItem("servel.local_users.v1")) ?? [];
       const u = users.find((x) => x && typeof x === "object" && x.id === ls.userId);
       const email = typeof u?.email === "string" ? u.email : null;
-      const role = (u?.role === "aguila" || u?.role === "halcon" || u?.role === "buho") ? u.role : inferRoleFromEmail(email);
-      return { email, role };
+      const hintedRole = normalizeRole(u?.role);
+      return { email, role: resolveAdminRole(email, hintedRole) };
     }
   }
 
@@ -336,6 +401,33 @@ function readAdminUiFromStorage(): AdminUiConfig | null {
 function writeAdminUiToStorage(value: AdminUiConfig) {
   if (typeof window === "undefined") return;
   localStorage.setItem(ADMIN_UI_KEY, JSON.stringify(value));
+}
+
+function readCategoryDefaultsFromStorage(): Record<string, PlantillaCampo[]> {
+  if (typeof window === "undefined") return {};
+  const raw = safeParseJson<Record<string, PlantillaCampo[]>>(localStorage.getItem(CATEGORY_DEFAULTS_KEY));
+  if (!raw || typeof raw !== "object") return {};
+  return raw;
+}
+
+function writeCategoryDefaultsToStorage(value: Record<string, PlantillaCampo[]>) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(CATEGORY_DEFAULTS_KEY, JSON.stringify(value));
+}
+
+async function persistCategoryDefaults(next: Record<string, PlantillaCampo[]>) {
+  writeCategoryDefaultsToStorage(next);
+  commit({ categoriaCampoDefaults: next });
+  if (snapshot.demo) return;
+  const res = await supabase
+    .from("admin_settings")
+    .upsert({ key: "category_defaults", value: next as unknown as Json } as any)
+    .select("key")
+    .maybeSingle();
+  if (res.error) {
+    if (isMissingTableError(res.error.message ?? "")) return;
+    throw res.error;
+  }
 }
 
 function demoDataset(now: number): { categorias: Categoria[]; tiposPrecio: TipoPrecio[]; servicios: Servicio[] } {
@@ -372,7 +464,7 @@ function demoDataset(now: number): { categorias: Categoria[]; tiposPrecio: TipoP
     version: 2,
     config: {
       precio: { activo: false, unidadCode: null },
-      duracion: { activo: false, obligatorio: false, tipo: "libre" },
+      duracion: { activo: false, obligatorio: false, tipo: "libre", modo: "estimada" },
       modalidad: { activo: false, opciones: [] },
       ubicacion: { requiere: false },
       urgencia: { permite: false },
@@ -1193,8 +1285,13 @@ function toService(row: {
   name: string;
   description: string;
   base_price_type: string;
+  base_price?: number | null;
+  visit_price?: number | null;
+  has_quantity_pricing?: boolean | null;
   active: boolean;
   allows_products?: boolean | null;
+  price_ranges?: Json | null;
+  min_price?: number | null;
   emergency: Json;
   quote_fields: Json;
   work_place?: string | null;
@@ -1206,7 +1303,7 @@ function toService(row: {
     version: 2,
     config: {
       precio: { activo: true, unidadCode: (row.base_price_type as PlantillaUnidadCode) ?? null },
-      duracion: { activo: false, obligatorio: false, tipo: "libre" },
+      duracion: { activo: false, obligatorio: false, tipo: "libre", modo: "estimada" },
       modalidad: { activo: false, opciones: [] },
       ubicacion: { requiere: false },
       urgencia: { permite: emerg.length > 0 },
@@ -1256,6 +1353,7 @@ function toService(row: {
       urgencia: { permite: definicion.config.urgencia?.permite ?? emerg.length > 0 },
       productos: { permite: definicion.config.productos?.permite ?? (row.allows_products ?? true) },
       precio: {
+        ...(definicion.config.precio ?? { activo: true, unidadCode: null }),
         activo: definicion.config.precio?.activo ?? true,
         unidadCode: (definicion.config.precio?.unidadCode as PlantillaUnidadCode) ?? (row.base_price_type as any),
       },
@@ -1266,6 +1364,7 @@ function toService(row: {
         obligatorio:
           definicion.config.duracion?.obligatorio ??
           (((definicion.config.precio?.unidadCode as any) ?? row.base_price_type ?? "") as string).includes("turno"),
+        modo: definicion.config.duracion?.modo === "exacta" ? "exacta" : "estimada",
         tipo: normalizeDuracionTipo(
           definicion.config as any,
           (definicion.config.precio?.unidadCode as any) ?? row.base_price_type ?? "",
@@ -1286,6 +1385,11 @@ function toService(row: {
     nombre: row.name,
     descripcion: row.description,
     activo: row.active,
+    basePrice: typeof row.base_price === "number" ? row.base_price : null,
+    visitPrice: typeof row.visit_price === "number" ? row.visit_price : null,
+    hasQuantityPricing: Boolean(row.has_quantity_pricing),
+    priceRanges: normalizePriceRanges(row.price_ranges),
+    minPrice: typeof row.min_price === "number" ? row.min_price : null,
     definicion,
     creadoEn: new Date(row.created_at).getTime(),
   };
@@ -1297,6 +1401,11 @@ function toServiceUpdate(patch: Partial<Servicio>): Record<string, unknown> {
   if ("nombre" in patch) out.name = patch.nombre ?? "";
   if ("descripcion" in patch) out.description = patch.descripcion ?? "";
   if ("activo" in patch) out.active = Boolean(patch.activo);
+  if ("basePrice" in patch) out.base_price = patch.basePrice ?? null;
+  if ("visitPrice" in patch) out.visit_price = patch.visitPrice ?? null;
+  if ("hasQuantityPricing" in patch) out.has_quantity_pricing = Boolean(patch.hasQuantityPricing);
+  if ("priceRanges" in patch) out.price_ranges = patch.priceRanges ?? [];
+  if ("minPrice" in patch) out.min_price = patch.minPrice ?? null;
   if ("definicion" in patch) {
     out.quote_fields = patch.definicion ?? null;
     const precio = patch.definicion?.config?.precio;
@@ -1439,8 +1548,15 @@ async function insertAudit(action: string, entityType: string, entityId: string 
 }
 
 async function upsertPendingChangeRequest(kind: AdminChangeKind, entityType: AdminChangeRequest["entityType"], entityId: string | null, payload: Json) {
-  const actorEmail = snapshot.actorEmail ?? "desconocido";
-  const actorRole = snapshot.adminRole;
+  let actorEmail = snapshot.actorEmail ?? null;
+  let actorRole = snapshot.adminRole;
+  if (!actorEmail) {
+    const actor = await getActor();
+    actorEmail = actor.email;
+    actorRole = actor.role;
+    commit({ adminRole: actorRole, actorEmail });
+  }
+  const normalizedActorEmail = actorEmail ?? "desconocido";
 
   const existing = snapshot.changeRequests.find(
     (r) =>
@@ -1448,7 +1564,7 @@ async function upsertPendingChangeRequest(kind: AdminChangeKind, entityType: Adm
       r.kind === kind &&
       r.entityType === entityType &&
       (r.entityId ?? null) === (entityId ?? null) &&
-      r.actorEmail === actorEmail,
+      r.actorEmail === normalizedActorEmail,
   );
 
   if (snapshot.demo) {
@@ -1456,7 +1572,7 @@ async function upsertPendingChangeRequest(kind: AdminChangeKind, entityType: Adm
       ? { ...existing, payload, createdAt: Date.now() }
       : {
           id: `local-${uid()}`,
-          actorEmail,
+          actorEmail: normalizedActorEmail,
           actorRole,
           kind,
           entityType,
@@ -1491,7 +1607,7 @@ async function upsertPendingChangeRequest(kind: AdminChangeKind, entityType: Adm
   const insert = await supabase
     .from("admin_change_requests" as any)
     .insert({
-      actor_email: actorEmail,
+      actor_email: normalizedActorEmail,
       actor_role: actorRole,
       kind,
       entity_type: entityType,
@@ -1507,7 +1623,7 @@ async function upsertPendingChangeRequest(kind: AdminChangeKind, entityType: Adm
     if (isMissingTableError(msg)) {
       const next: AdminChangeRequest = {
         id: `local-${uid()}`,
-        actorEmail,
+        actorEmail: normalizedActorEmail,
         actorRole,
         kind,
         entityType,
@@ -1561,6 +1677,7 @@ async function loadAll() {
     { data: tipos, error: tiposErr },
     { data: svcs, error: svcsErr },
     { data: uiRow, error: uiErr },
+    { data: catDefaultsRow, error: catDefaultsErr },
     { data: reqs, error: reqsErr },
     { data: audit, error: auditErr },
   ] = await Promise.all([
@@ -1568,6 +1685,7 @@ async function loadAll() {
     supabase.from("price_types").select("*").order("created_at", { ascending: true }),
     supabase.from("services").select("*").order("created_at", { ascending: false }),
     supabase.from("admin_settings").select("value").eq("key", "ui").maybeSingle(),
+    supabase.from("admin_settings").select("value").eq("key", "category_defaults").maybeSingle(),
     supabase.from("admin_change_requests" as any).select("*").order("created_at", { ascending: false }).limit(100),
     supabase.from("admin_audit_log" as any).select("*").order("created_at", { ascending: false }).limit(100),
   ]);
@@ -1601,6 +1719,16 @@ async function loadAll() {
   let adminUi = mergeAdminUi(snapshot.adminUi, stored);
   adminUi = mergeAdminUi(adminUi, fromDb);
   writeAdminUiToStorage(adminUi);
+
+  const storedCatDefaults = readCategoryDefaultsFromStorage();
+  const fromDbCatDefaults =
+    catDefaultsErr && isMissingTableError(catDefaultsErr.message ?? "")
+      ? null
+      : catDefaultsRow && typeof (catDefaultsRow as any).value === "object"
+        ? ((catDefaultsRow as any).value as Record<string, PlantillaCampo[]>)
+        : null;
+  const categoriaCampoDefaults = { ...storedCatDefaults, ...(fromDbCatDefaults ?? {}) };
+  writeCategoryDefaultsToStorage(categoriaCampoDefaults);
 
   const changeRequests: AdminChangeRequest[] =
     reqsErr && isMissingTableError(reqsErr.message ?? "")
@@ -1638,6 +1766,7 @@ async function loadAll() {
     tiposPrecio,
     servicios,
     adminUi,
+    categoriaCampoDefaults,
     loaded: true,
     demo: false,
     adminRole: actor.role,
@@ -1652,6 +1781,8 @@ function ensureLoaded() {
   if (loadingPromise) return;
   const stored = readAdminUiFromStorage();
   if (stored) commit({ adminUi: mergeAdminUi(snapshot.adminUi, stored) });
+  const storedDefaults = readCategoryDefaultsFromStorage();
+  if (storedDefaults && Object.keys(storedDefaults).length > 0) commit({ categoriaCampoDefaults: storedDefaults });
   loadingPromise = loadAll()
     .catch((err: unknown) => {
       const msg =
@@ -1773,6 +1904,44 @@ export const servicesActions = {
     await loadAll();
   },
 
+  async refreshActor() {
+    const actor = await getActor();
+    commit({ adminRole: actor.role, actorEmail: actor.email });
+  },
+
+  createCamposFromCategoryDefaults(categoryId: string): PlantillaCampo[] {
+    const defaults = snapshot.categoriaCampoDefaults[categoryId] ?? [];
+    if (defaults.length === 0) return [];
+
+    const idMap = new Map<string, string>();
+    defaults.forEach((d) => {
+      idMap.set(d.id, `fld-${uid()}`);
+    });
+
+    return defaults.map((d) => {
+      const newId = idMap.get(d.id) ?? `fld-${uid()}`;
+      const opciones =
+        d.opciones?.map((o) => ({ id: `opt-${uid()}`, label: o.label })) ?? undefined;
+      const visibleSiRaw = d.visibleSi ?? null;
+      const visibleSi =
+        visibleSiRaw && typeof visibleSiRaw === "object" && typeof (visibleSiRaw as any).dependeDe === "string"
+          ? idMap.has((visibleSiRaw as any).dependeDe)
+            ? { ...(visibleSiRaw as any), dependeDe: idMap.get((visibleSiRaw as any).dependeDe)! }
+            : null
+          : null;
+
+      return {
+        id: newId,
+        defaultKey: d.defaultKey ?? d.id,
+        nombre: d.nombre,
+        tipo: d.tipo,
+        obligatorio: d.obligatorio,
+        opciones,
+        visibleSi,
+      };
+    });
+  },
+
   async requestCreateService(payload: {
     nombre: string;
     descripcion?: string;
@@ -1782,25 +1951,30 @@ export const servicesActions = {
   }) {
     const nombre = payload.nombre.trim();
     if (!nombre) return;
+    const definicionBase: PlantillaServicioDefinition =
+      payload.definicion ??
+      ({
+        version: 2,
+        config: {
+          precio: { activo: false, unidadCode: (snapshot.tiposPrecio[0]?.code ?? "fijo") as PlantillaUnidadCode },
+          duracion: { activo: false, obligatorio: false, tipo: "libre", modo: "estimada" },
+          modalidad: { activo: false, opciones: [] },
+          ubicacion: { requiere: false },
+          urgencia: { permite: false },
+          productos: { permite: true },
+        },
+        campos: [],
+      } as PlantillaServicioDefinition);
+    const definicion: PlantillaServicioDefinition =
+      payload.categoryId && (definicionBase.campos?.length ?? 0) === 0
+        ? { ...definicionBase, campos: this.createCamposFromCategoryDefaults(payload.categoryId) }
+        : { ...definicionBase, campos: definicionBase.campos ?? [] };
     const base: Pick<Servicio, "nombre" | "descripcion" | "categoryId" | "activo" | "definicion"> = {
       nombre,
       descripcion: payload.descripcion ?? "",
       categoryId: payload.categoryId,
       activo: payload.activo ?? true,
-      definicion:
-        payload.definicion ??
-        ({
-          version: 2,
-          config: {
-            precio: { activo: false, unidadCode: (snapshot.tiposPrecio[0]?.code ?? "fijo") as PlantillaUnidadCode },
-            duracion: { activo: false, obligatorio: false, tipo: "libre" },
-            modalidad: { activo: false, opciones: [] },
-            ubicacion: { requiere: false },
-            urgencia: { permite: false },
-            productos: { permite: true },
-          },
-          campos: [],
-        } as PlantillaServicioDefinition),
+      definicion,
     };
     await upsertPendingChangeRequest("create_service", "services", null, base as unknown as Json);
   },
@@ -1809,12 +1983,43 @@ export const servicesActions = {
     const req = snapshot.changeRequests.find((r) => r.id === id);
     if (!req || req.status !== "pendiente") return;
     const actorEmail = snapshot.actorEmail ?? "desconocido";
+    const isLocalRequest = req.id.startsWith("local-");
 
     const canApprove =
       snapshot.adminRole === "aguila" || (snapshot.adminRole === "halcon" && req.actorRole === "buho");
     if (!canApprove) throw new Error("No tenés permisos para aprobar este cambio.");
 
     if (snapshot.demo) {
+      if (req.kind === "create_category") {
+        const name = typeof (req.payload as any)?.name === "string" ? (req.payload as any).name : "";
+        if (name) commit({ categorias: [...snapshot.categorias, { id: `demo-cat-${jid("new")}`, nombre: name }] });
+      } else if (req.kind === "update_category" && req.entityId) {
+        const name = typeof (req.payload as any)?.name === "string" ? (req.payload as any).name : "";
+        if (name) commit({ categorias: snapshot.categorias.map((c) => (c.id === req.entityId ? { ...c, nombre: name } : c)) });
+      } else if (req.kind === "delete_category" && req.entityId) {
+        commit({ categorias: snapshot.categorias.filter((c) => c.id !== req.entityId) });
+      } else if (req.kind === "delete_service" && req.entityId) {
+        commit({ servicios: snapshot.servicios.filter((s) => s.id !== req.entityId) });
+      } else if (req.kind === "update_service" && req.entityId) {
+        const patch = (req.payload as any)?.patch as Partial<Servicio> | undefined;
+        if (patch) commit({ servicios: snapshot.servicios.map((s) => (s.id === req.entityId ? { ...s, ...patch } : s)) });
+      } else if (req.kind === "create_service") {
+        const p = req.payload as any;
+        const nombre = typeof p?.nombre === "string" ? p.nombre : "";
+        if (nombre) {
+          const svc: Servicio = {
+            id: `demo-srv-${jid("new")}`,
+            categoryId: typeof p?.categoryId === "string" ? p.categoryId : undefined,
+            nombre,
+            descripcion: typeof p?.descripcion === "string" ? p.descripcion : "",
+            activo: typeof p?.activo === "boolean" ? p.activo : true,
+            definicion: p?.definicion as PlantillaServicioDefinition,
+            creadoEn: Date.now(),
+          };
+          commit({ servicios: [svc, ...snapshot.servicios] });
+        }
+      }
+
       const next = snapshot.changeRequests.map((r) =>
         r.id === id ? { ...r, status: "aprobado" as AdminChangeStatus, approverEmail: actorEmail, decidedAt: Date.now() } : r,
       );
@@ -1886,11 +2091,32 @@ export const servicesActions = {
       }
     }
 
+    if (isLocalRequest) {
+      const next = snapshot.changeRequests.map((r) =>
+        r.id === id ? { ...r, status: "aprobado" as AdminChangeStatus, approverEmail: actorEmail, decidedAt: Date.now() } : r,
+      );
+      writeRequestsToStorage(next);
+      commit({ changeRequests: next });
+      await loadAll();
+      return;
+    }
+
     const upd = await supabase
       .from("admin_change_requests" as any)
       .update({ status: "aprobado", approver_email: actorEmail, decided_at: new Date().toISOString() } as any)
       .eq("id", id);
-    if (upd.error) throw upd.error;
+    if (upd.error) {
+      if (isMissingTableError(upd.error.message ?? "")) {
+        const next = snapshot.changeRequests.map((r) =>
+          r.id === id ? { ...r, status: "aprobado" as AdminChangeStatus, approverEmail: actorEmail, decidedAt: Date.now() } : r,
+        );
+        writeRequestsToStorage(next);
+        commit({ changeRequests: next });
+        await loadAll();
+        return;
+      }
+      throw upd.error;
+    }
     await loadAll();
   },
 
@@ -1898,6 +2124,7 @@ export const servicesActions = {
     const req = snapshot.changeRequests.find((r) => r.id === id);
     if (!req || req.status !== "pendiente") return;
     const actorEmail = snapshot.actorEmail ?? "desconocido";
+    const isLocalRequest = req.id.startsWith("local-");
 
     const canReject =
       snapshot.adminRole === "aguila" || (snapshot.adminRole === "halcon" && req.actorRole === "buho");
@@ -1913,11 +2140,34 @@ export const servicesActions = {
       return;
     }
 
+    if (isLocalRequest) {
+      const next = snapshot.changeRequests.map((r) =>
+        r.id === id ? { ...r, status: "rechazado" as AdminChangeStatus, approverEmail: actorEmail, decidedAt: Date.now() } : r,
+      );
+      writeRequestsToStorage(next);
+      commit({ changeRequests: next });
+      await insertAudit(`reject:${req.kind}`, req.entityType, req.entityId ?? null, null, req.payload);
+      await loadAll();
+      return;
+    }
+
     const upd = await supabase
       .from("admin_change_requests" as any)
       .update({ status: "rechazado", approver_email: actorEmail, decided_at: new Date().toISOString() } as any)
       .eq("id", id);
-    if (upd.error) throw upd.error;
+    if (upd.error) {
+      if (isMissingTableError(upd.error.message ?? "")) {
+        const next = snapshot.changeRequests.map((r) =>
+          r.id === id ? { ...r, status: "rechazado" as AdminChangeStatus, approverEmail: actorEmail, decidedAt: Date.now() } : r,
+        );
+        writeRequestsToStorage(next);
+        commit({ changeRequests: next });
+        await insertAudit(`reject:${req.kind}`, req.entityType, req.entityId ?? null, null, req.payload);
+        await loadAll();
+        return;
+      }
+      throw upd.error;
+    }
     await insertAudit(`reject:${req.kind}`, req.entityType, req.entityId ?? null, null, req.payload);
     await loadAll();
   },
@@ -2083,7 +2333,7 @@ export const servicesActions = {
       version: 2,
       config: {
         precio: { activo: false, unidadCode: defaultUnidad },
-        duracion: { activo: false, obligatorio: false, tipo: "libre" },
+        duracion: { activo: false, obligatorio: false, tipo: "libre", modo: "estimada" },
         modalidad: { activo: false, opciones: [] },
         ubicacion: { requiere: false },
         urgencia: { permite: false },
@@ -2196,8 +2446,11 @@ export const servicesActions = {
   async addCustomField(serviceId: string, tipo: PlantillaCampoTipo = "texto_corto") {
     const s = snapshot.servicios.find((x) => x.id === serviceId);
     if (!s) return;
+    const categoryId = s.categoryId ?? null;
+    const defaultKey = categoryId ? `dfl-${uid()}` : undefined;
     const campo: PlantillaCampo = {
       id: `fld-${uid()}`,
+      defaultKey,
       nombre: "Nuevo campo",
       tipo,
       obligatorio: false,
@@ -2213,11 +2466,31 @@ export const servicesActions = {
     await this.update(serviceId, {
       definicion: { ...s.definicion, campos: [...(s.definicion.campos ?? []), campo] },
     });
+
+    if (categoryId && defaultKey) {
+      const base = snapshot.categoriaCampoDefaults[categoryId] ?? [];
+      const nextDefaultCampo: PlantillaCampo = {
+        id: defaultKey,
+        defaultKey,
+        nombre: campo.nombre,
+        tipo: campo.tipo,
+        obligatorio: campo.obligatorio,
+        opciones: campo.opciones?.map((o) => ({ id: `opt-${uid()}`, label: o.label })),
+        visibleSi: null,
+      };
+      await persistCategoryDefaults({
+        ...snapshot.categoriaCampoDefaults,
+        [categoryId]: [...base, nextDefaultCampo],
+      });
+    }
   },
 
   async updateCustomField(serviceId: string, fieldId: string, patch: Partial<PlantillaCampo>) {
     const s = snapshot.servicios.find((x) => x.id === serviceId);
     if (!s) return;
+    const original = (s.definicion.campos ?? []).find((c) => c.id === fieldId) ?? null;
+    const categoryId = s.categoryId ?? null;
+    const defaultKey = original?.defaultKey ?? null;
     const campos = (s.definicion.campos ?? []).map((c) => {
       if (c.id !== fieldId) return c;
       const next: PlantillaCampo = { ...c, ...patch };
@@ -2236,14 +2509,42 @@ export const servicesActions = {
       return next;
     });
     await this.update(serviceId, { definicion: { ...s.definicion, campos } });
+
+    if (categoryId && defaultKey) {
+      const current = snapshot.categoriaCampoDefaults[categoryId] ?? [];
+      const idx = current.findIndex((d) => d.id === defaultKey);
+      if (idx >= 0) {
+        const existing = current[idx]!;
+        const nextDefault: PlantillaCampo = {
+          ...existing,
+          nombre: typeof patch.nombre === "string" ? patch.nombre : existing.nombre,
+          tipo: (patch.tipo as any) ?? existing.tipo,
+          obligatorio: typeof patch.obligatorio === "boolean" ? patch.obligatorio : existing.obligatorio,
+        };
+        const nextList = [...current];
+        nextList[idx] = nextDefault;
+        await persistCategoryDefaults({ ...snapshot.categoriaCampoDefaults, [categoryId]: nextList });
+      }
+    }
   },
 
   async removeCustomField(serviceId: string, fieldId: string) {
     const s = snapshot.servicios.find((x) => x.id === serviceId);
     if (!s) return;
+    const target = (s.definicion.campos ?? []).find((c) => c.id === fieldId) ?? null;
+    const categoryId = s.categoryId ?? null;
+    const defaultKey = target?.defaultKey ?? null;
     await this.update(serviceId, {
       definicion: { ...s.definicion, campos: (s.definicion.campos ?? []).filter((c) => c.id !== fieldId) },
     });
+
+    if (categoryId && defaultKey) {
+      const current = snapshot.categoriaCampoDefaults[categoryId] ?? [];
+      const nextList = current.filter((d) => d.id !== defaultKey);
+      if (nextList.length !== current.length) {
+        await persistCategoryDefaults({ ...snapshot.categoriaCampoDefaults, [categoryId]: nextList });
+      }
+    }
   },
 
   async moveCustomField(serviceId: string, fieldId: string, dir: -1 | 1) {

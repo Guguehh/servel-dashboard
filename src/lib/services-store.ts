@@ -1662,15 +1662,6 @@ async function upsertPendingChangeRequest(kind: AdminChangeKind, entityType: Adm
 async function loadAll() {
   commit({ error: null });
   const actor = await getActor();
-  try {
-    await seedDemoIfEmpty();
-  } catch (err: unknown) {
-    const msg =
-      typeof err === "object" && err && "message" in err && typeof (err as any).message === "string"
-        ? (err as any).message
-        : "No se pudo crear el set de demo.";
-    commit({ error: msg });
-  }
 
   const [
     { data: cats, error: catsErr },

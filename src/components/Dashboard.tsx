@@ -1,15 +1,11 @@
 import { Bolt, Plus, Wrench, Boxes, TrendingUp } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { useAuth } from "@/lib/auth-context";
 import { useCategories, useDataStatus, usePriceTypes, useServices, servicesActions } from "@/lib/services-store";
 import { AppShell } from "@/components/AppShell";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Area, AreaChart, XAxis, YAxis } from "recharts";
-import { supabase } from "@/integrations/supabase/client";
 
 export function Dashboard() {
-  const { user } = useAuth();
   const categorias = useCategories();
   const { error, demo } = useDataStatus();
   const services = useServices();
@@ -28,33 +24,9 @@ export function Dashboard() {
       (c.urgencia.permite ? 1 : 0)
     );
   }, 0);
-  const [usuarios, setUsuarios] = useState<number | null>(null);
-  const [especialistas, setEspecialistas] = useState<number | null>(null);
-  const [configServicios, setConfigServicios] = useState<number | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      supabase.from("users").select("id", { count: "exact", head: true }),
-      supabase.from("specialist").select("id", { count: "exact", head: true }),
-      supabase.from("specialist_services").select("id", { count: "exact", head: true }),
-    ])
-      .then(([u, s, ss]) => {
-        if (cancelled) return;
-        setUsuarios(u.count ?? null);
-        setEspecialistas(s.count ?? null);
-        setConfigServicios(ss.count ?? null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setUsuarios(null);
-        setEspecialistas(null);
-        setConfigServicios(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const usuarios = null;
+  const especialistas = null;
+  const configServicios = total;
 
   const topActivos = [...services]
     .filter((s) => s.activo)
@@ -205,8 +177,9 @@ export function Dashboard() {
                   stroke="var(--color-solicitudes)"
                   fill="rgba(0, 102, 255, 0.12)"
                   strokeWidth={3}
-                  dot={({ cx, cy }) => (
+                  dot={({ cx, cy, payload }) => (
                     <rect
+                      key={`dot-${payload?.dia ?? "na"}-${cx ?? 0}-${cy ?? 0}`}
                       x={(cx ?? 0) - 3}
                       y={(cy ?? 0) - 3}
                       width={6}

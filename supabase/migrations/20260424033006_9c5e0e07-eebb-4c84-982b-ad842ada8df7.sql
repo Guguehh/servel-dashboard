@@ -1,3 +1,4 @@
+create extension if not exists pgcrypto;
 
 -- Seed admin user using Supabase auth schema
 DO $$
@@ -18,7 +19,7 @@ BEGIN
       'authenticated',
       'authenticated',
       'admin@admin.com',
-      crypt('agus1234!', gen_salt('bf')),
+      extensions.crypt('agus1234!', extensions.gen_salt('bf')),
       now(), now(), now(),
       '{"provider":"email","providers":["email"]}',
       '{"full_name":"Oliver Admin"}',
